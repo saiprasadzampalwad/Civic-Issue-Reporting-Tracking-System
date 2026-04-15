@@ -15,49 +15,40 @@ import javax.servlet.http.*;
 import java.io.IOException;
 import java.util.List;
 
-/**
- * CitizenDashboardServlet.java
- * Loads the citizen's reported issues and forwards to citizen_dashboard.jsp.
- * URL: /citizen/dashboard
- */
+/** URL: /citizen/dashboard — with filter + pagination */
 @WebServlet("/citizen/dashboard")
 public class CitizenDashboardServlet extends HttpServlet {
 
+    private static final int PAGE_SIZE = 10;
     private IssueDAO issueDAO;
+    @Override public void init() { issueDAO = new IssueDAO(); }
 
     @Override
-    public void init() throws ServletException {
-        issueDAO = new IssueDAO();
-    }
-
-    @Override
-    protected void doGet(HttpServletRequest request, HttpServletResponse response)
-            throws ServletException, IOException {
-
-        // Session guard
-        HttpSession session = request.getSession(false);
-        if (session == null || session.getAttribute("loggedInUser") == null) {
-            response.sendRedirect(request.getContextPath() + "/login");
-            return;
-        }
+    protected void doGet(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        HttpSession session = req.getSession(false);
+        if (session == null || session.getAttribute("loggedInUser") == null) { res.sendRedirect(req.getContextPath()+"/login"); return; }
         User user = (User) session.getAttribute("loggedInUser");
-        if (!"CITIZEN".equals(user.getRole())) {
-            response.sendRedirect(request.getContextPath() + "/login");
-            return;
-        }
+        if (!"CITIZEN".equals(user.getRole())) { res.sendRedirect(req.getContextPath()+"/login"); return; }
 
-        // Fetch this citizen's issues and expose to JSP via request attribute
-        List<Issue> myIssues = issueDAO.getIssuesByCitizen(user.getUserId());
-        request.setAttribute("myIssues", myIssues);
+        String filterStatus   = req.getParameter("filterStatus");
+        String filterCategory = req.getParameter("filterCategory");
+        int page = 1;
+        try { page = Integer.parseInt(req.getParameter("page")); } catch (Exception e) {}
+        if (page < 1) page = 1;
 
-        // Pick up and clear any one-time success message from the session
-        String successMessage = (String) session.getAttribute("successMessage");
-        if (successMessage != null) {
-            request.setAttribute("successMessage", successMessage);
-            session.removeAttribute("successMessage");
-        }
+        List<Issue> myIssues = issueDAO.getIssuesByCitizen(user.getUserId(), filterStatus, filterCategory, page, PAGE_SIZE);
+        int totalCount = issueDAO.countByCitizen(user.getUserId());
+        int totalPages = (int) Math.ceil((double) totalCount / PAGE_SIZE);
 
-        request.getRequestDispatcher("/WEB-INF/views/citizen_dashboard.jsp")
-               .forward(request, response);
+        req.setAttribute("myIssues",       myIssues);
+        req.setAttribute("currentPage",    page);
+        req.setAttribute("totalPages",     totalPages);
+        req.setAttribute("filterStatus",   filterStatus != null ? filterStatus : "");
+        req.setAttribute("filterCategory", filterCategory != null ? filterCategory : "");
+
+        String msg = (String) session.getAttribute("successMessage");
+        if (msg != null) { req.setAttribute("successMessage", msg); session.removeAttribute("successMessage"); }
+
+        req.getRequestDispatcher("/WEB-INF/views/citizen_dashboard.jsp").forward(req, res);
     }
 }

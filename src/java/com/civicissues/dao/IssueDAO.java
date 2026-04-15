@@ -6,250 +6,323 @@
 package com.civicissues.dao;
 
 import com.civicissues.model.Issue;
+import com.civicissues.model.Rating;
 import com.civicissues.util.DBConnection;
 
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 /**
- * IssueDAO.java - Data Access Object for the `Issues` and `Status_Updates` tables.
- *
- * Key design decisions:
- *  - All queries use PreparedStatement to prevent SQL injection.
- *  - updateIssueStatus() uses a manual JDBC transaction (commit/rollback)
- *    to atomically update Issues and insert into Status_Updates.
+ * IssueDAO.java - Full CRUD + photos + SLA + search/filter + pagination + analytics + CSV.
  */
 public class IssueDAO {
 
-    private Connection conn;
+    private static final int SLA_HOURS = 72; // issues breach SLA after 72 hours
+    private final Connection conn;
 
-    public IssueDAO() {
-        this.conn = DBConnection.getInstance().getConnection();
-    }
-
-    // -----------------------------------------------------------------------
-    // 1. createIssue — INSERT a new civic issue reported by a citizen
-    // -----------------------------------------------------------------------
-    /**
-     * Inserts a new Issue into the database.
-     *
-     * @param issue  populated Issue POJO (citizenId, category, gpsLocation,
-     *               description, photoUrl must be set; status defaults to 'OPEN')
-     * @return true if insert succeeded, false otherwise
-     */
-    public boolean createIssue(Issue issue) {
-        String sql = "INSERT INTO Issues "
-                   + "(citizen_id, category, gps_location, description, photo_url, status, "
-                   + " assigned_department_id, assigned_crew_id) "
-                   + "VALUES (?, ?, ?, ?, ?, 'OPEN', NULL, NULL)";
-
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, issue.getCitizenId());
-            ps.setString(2, issue.getCategory());
-            ps.setString(3, issue.getGpsLocation());
-            ps.setString(4, issue.getDescription());
-            ps.setString(5, issue.getPhotoUrl());
-
-            int rowsAffected = ps.executeUpdate();
-            return rowsAffected > 0;
-
-        } catch (SQLException e) {
-            System.err.println("[IssueDAO] createIssue error: " + e.getMessage());
-            return false;
-        }
-    }
+    public IssueDAO() { this.conn = DBConnection.getInstance().getConnection(); }
 
     // -----------------------------------------------------------------------
-    // 2. getAllOpenIssues — for the Admin Dashboard
+    // createIssue — saves issue + multiple photos + sets SLA deadline
     // -----------------------------------------------------------------------
-    /**
-     * Retrieves all issues with status OPEN or ASSIGNED (active issues).
-     * Uses LEFT JOINs to also fetch citizen name and department name.
-     *
-     * @return List of Issue POJOs with display fields populated
-     */
-    public List<Issue> getAllOpenIssues() {
-        List<Issue> issues = new ArrayList<>();
-
-        String sql = "SELECT i.issue_id, i.citizen_id, i.category, i.gps_location, "
-                   + "       i.description, i.photo_url, i.status, "
-                   + "       i.assigned_department_id, i.assigned_crew_id, "
-                   + "       u.name AS citizen_name, "
-                   + "       d.department_name "
-                   + "FROM Issues i "
-                   + "LEFT JOIN Users u ON i.citizen_id = u.user_id "
-                   + "LEFT JOIN Departments d ON i.assigned_department_id = d.department_id "
-                   + "WHERE i.status IN ('OPEN', 'ASSIGNED', 'IN_PROGRESS') "
-                   + "ORDER BY i.issue_id DESC";
-
-        try (PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
-
-            while (rs.next()) {
-                issues.add(mapRow(rs));
+    public boolean createIssue(Issue issue, List<String> photoUrls) {
+        String sql = "INSERT INTO Issues (citizen_id,category,gps_location,description,status,sla_deadline) "
+                   + "VALUES (?,?,?,?,'OPEN', DATE_ADD(NOW(), INTERVAL ? HOUR))";
+        try {
+            conn.setAutoCommit(false);
+            int newId;
+            try (PreparedStatement ps = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+                ps.setInt(1, issue.getCitizenId());
+                ps.setString(2, issue.getCategory());
+                ps.setString(3, issue.getGpsLocation());
+                ps.setString(4, issue.getDescription());
+                ps.setInt(5, SLA_HOURS);
+                ps.executeUpdate();
+                try (ResultSet keys = ps.getGeneratedKeys()) {
+                    if (!keys.next()) { conn.rollback(); return false; }
+                    newId = keys.getInt(1);
+                }
             }
-
+            if (photoUrls != null && !photoUrls.isEmpty()) {
+                try (PreparedStatement ph = conn.prepareStatement(
+                        "INSERT INTO Issue_Photos (issue_id, photo_url) VALUES (?,?)")) {
+                    for (String url : photoUrls) {
+                        ph.setInt(1, newId); ph.setString(2, url); ph.addBatch();
+                    }
+                    ph.executeBatch();
+                }
+            }
+            conn.commit();
+            return true;
         } catch (SQLException e) {
-            System.err.println("[IssueDAO] getAllOpenIssues error: " + e.getMessage());
+            try { conn.rollback(); } catch (SQLException ex) {}
+            System.err.println("[IssueDAO] createIssue: " + e.getMessage());
+            return false;
+        } finally {
+            try { conn.setAutoCommit(true); } catch (SQLException e) {}
         }
-
-        return issues;
     }
 
     // -----------------------------------------------------------------------
-    // 3. getIssuesByCitizen — for the Citizen Dashboard
+    // getIssuesByCitizen — with optional filter + pagination
     // -----------------------------------------------------------------------
-    /**
-     * Retrieves all issues reported by a specific citizen.
-     *
-     * @param citizenId  the user_id of the logged-in citizen
-     * @return List of Issue POJOs
-     */
-    public List<Issue> getIssuesByCitizen(int citizenId) {
-        List<Issue> issues = new ArrayList<>();
+    public List<Issue> getIssuesByCitizen(int citizenId, String filterStatus,
+                                           String filterCategory, int page, int pageSize) {
+        List<Issue> list = new ArrayList<>();
+        StringBuilder sb = new StringBuilder(
+            "SELECT i.*, u.name AS citizen_name, d.department_name " +
+            "FROM Issues i " +
+            "LEFT JOIN Users u ON i.citizen_id = u.user_id " +
+            "LEFT JOIN Departments d ON i.assigned_department_id = d.department_id " +
+            "WHERE i.citizen_id = ?");
+        List<Object> params = new ArrayList<>();
+        params.add(citizenId);
+        if (filterStatus != null && !filterStatus.isEmpty()) { sb.append(" AND i.status=?"); params.add(filterStatus); }
+        if (filterCategory != null && !filterCategory.isEmpty()) { sb.append(" AND i.category=?"); params.add(filterCategory); }
+        sb.append(" ORDER BY i.issue_id DESC LIMIT ? OFFSET ?");
+        params.add(pageSize);
+        params.add((page - 1) * pageSize);
 
-        String sql = "SELECT i.issue_id, i.citizen_id, i.category, i.gps_location, "
-                   + "       i.description, i.photo_url, i.status, "
-                   + "       i.assigned_department_id, i.assigned_crew_id, "
-                   + "       u.name AS citizen_name, "
-                   + "       d.department_name "
-                   + "FROM Issues i "
-                   + "LEFT JOIN Users u ON i.citizen_id = u.user_id "
-                   + "LEFT JOIN Departments d ON i.assigned_department_id = d.department_id "
-                   + "WHERE i.citizen_id = ? "
-                   + "ORDER BY i.issue_id DESC";
+        try (PreparedStatement ps = conn.prepareStatement(sb.toString())) {
+            for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) list.add(mapRow(rs));
+            }
+        } catch (SQLException e) { System.err.println("[IssueDAO] getByCitizen: " + e.getMessage()); }
+        attachPhotos(list);
+        attachRatings(list);
+        return list;
+    }
 
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+    public int countByCitizen(int citizenId) {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM Issues WHERE citizen_id=?")) {
             ps.setInt(1, citizenId);
+            try (ResultSet rs = ps.executeQuery()) { if (rs.next()) return rs.getInt(1); }
+        } catch (SQLException e) {}
+        return 0;
+    }
 
+    // -----------------------------------------------------------------------
+    // getAllOpenIssues — admin view with filter + pagination
+    // -----------------------------------------------------------------------
+    public List<Issue> getAllOpenIssues(String filterStatus, String filterCategory,
+                                        int page, int pageSize) {
+        List<Issue> list = new ArrayList<>();
+        StringBuilder sb = new StringBuilder(
+            "SELECT i.*, u.name AS citizen_name, d.department_name " +
+            "FROM Issues i " +
+            "LEFT JOIN Users u ON i.citizen_id = u.user_id " +
+            "LEFT JOIN Departments d ON i.assigned_department_id = d.department_id " +
+            "WHERE 1=1");
+        List<Object> params = new ArrayList<>();
+        if (filterStatus != null && !filterStatus.isEmpty()) { sb.append(" AND i.status=?"); params.add(filterStatus); }
+        else sb.append(" AND i.status IN ('OPEN','ASSIGNED','IN_PROGRESS')");
+        if (filterCategory != null && !filterCategory.isEmpty()) { sb.append(" AND i.category=?"); params.add(filterCategory); }
+        sb.append(" ORDER BY i.sla_deadline ASC, i.issue_id DESC LIMIT ? OFFSET ?");
+        params.add(pageSize);
+        params.add((page - 1) * pageSize);
+
+        try (PreparedStatement ps = conn.prepareStatement(sb.toString())) {
+            for (int i = 0; i < params.size(); i++) ps.setObject(i + 1, params.get(i));
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    issues.add(mapRow(rs));
+                    Issue issue = mapRow(rs);
+                    issue.setSlaBreached(issue.getSlaDeadline() != null &&
+                        issue.getSlaDeadline().before(new Timestamp(System.currentTimeMillis())));
+                    list.add(issue);
                 }
             }
+        } catch (SQLException e) { System.err.println("[IssueDAO] getAllOpen: " + e.getMessage()); }
+        attachPhotos(list);
+        return list;
+    }
 
-        } catch (SQLException e) {
-            System.err.println("[IssueDAO] getIssuesByCitizen error: " + e.getMessage());
-        }
-
-        return issues;
+    public int countAllOpen() {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT COUNT(*) FROM Issues WHERE status IN ('OPEN','ASSIGNED','IN_PROGRESS')")) {
+            try (ResultSet rs = ps.executeQuery()) { if (rs.next()) return rs.getInt(1); }
+        } catch (SQLException e) {}
+        return 0;
     }
 
     // -----------------------------------------------------------------------
-    // 4. updateIssueStatus — TRANSACTIONAL update + status history insert
+    // updateIssueStatus — transactional: update Issues + insert Status_Updates + email
     // -----------------------------------------------------------------------
-    /**
-     * Updates the status of an issue AND inserts an audit record into Status_Updates.
-     * Both operations are wrapped in a single JDBC transaction:
-     *   - If either fails, a rollback is performed to keep data consistent.
-     *   - On success, the transaction is committed.
-     *
-     * @param issueId    PK of the issue to update
-     * @param newStatus  target status string ('ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED')
-     * @param updatedBy  user_id of the admin/crew performing the update
-     * @param notes      optional notes describing the status change
-     * @return true if both operations succeeded and were committed
-     */
-    public boolean updateIssueStatus(int issueId, String newStatus, int updatedBy, String notes) {
-
-        // SQL to read the current status before changing it (needed for Status_Updates record)
-        String selectSql = "SELECT status FROM Issues WHERE issue_id = ?";
-
-        // SQL to update the Issues table
-        String updateSql = "UPDATE Issues SET status = ? WHERE issue_id = ?";
-
-        // SQL to insert audit trail into Status_Updates
-        String insertSql = "INSERT INTO Status_Updates "
-                         + "(issue_id, updated_by, previous_status, new_status, notes, timestamp) "
-                         + "VALUES (?, ?, ?, ?, ?, NOW())";
-
-        String previousStatus = null;
-
+    public boolean updateIssueStatus(int issueId, String newStatus, int updatedBy,
+                                      int assignedDeptId, int assignedCrewId, String notes) {
+        String selectSql = "SELECT status FROM Issues WHERE issue_id=?";
+        String updateSql = "UPDATE Issues SET status=?, assigned_department_id=?, assigned_crew_id=? WHERE issue_id=?";
+        String insertSql = "INSERT INTO Status_Updates (issue_id,updated_by,previous_status,new_status,notes,update_time) VALUES (?,?,?,?,?,NOW())";
+        String prevStatus = null;
         try {
-            // --- Step 1: Disable auto-commit to start the transaction ---
             conn.setAutoCommit(false);
-
-            // --- Step 2: Read the current status ---
-            try (PreparedStatement selectPs = conn.prepareStatement(selectSql)) {
-                selectPs.setInt(1, issueId);
-                try (ResultSet rs = selectPs.executeQuery()) {
-                    if (rs.next()) {
-                        previousStatus = rs.getString("status");
-                    } else {
-                        // Issue not found — abort
-                        conn.rollback();
-                        conn.setAutoCommit(true);
-                        return false;
-                    }
+            try (PreparedStatement s = conn.prepareStatement(selectSql)) {
+                s.setInt(1, issueId);
+                try (ResultSet rs = s.executeQuery()) {
+                    if (!rs.next()) { conn.rollback(); return false; }
+                    prevStatus = rs.getString(1);
                 }
             }
-
-            // --- Step 3: Update the Issues row ---
-            try (PreparedStatement updatePs = conn.prepareStatement(updateSql)) {
-                updatePs.setString(1, newStatus);
-                updatePs.setInt(2, issueId);
-                updatePs.executeUpdate();
+            try (PreparedStatement u = conn.prepareStatement(updateSql)) {
+                u.setString(1, newStatus);
+                u.setObject(2, assignedDeptId > 0 ? assignedDeptId : null);
+                u.setObject(3, assignedCrewId > 0 ? assignedCrewId : null);
+                u.setInt(4, issueId);
+                u.executeUpdate();
             }
-
-            // --- Step 4: Insert into Status_Updates (audit trail) ---
-            try (PreparedStatement insertPs = conn.prepareStatement(insertSql)) {
-                insertPs.setInt(1, issueId);
-                insertPs.setInt(2, updatedBy);
-                insertPs.setString(3, previousStatus);
-                insertPs.setString(4, newStatus);
-                insertPs.setString(5, notes != null ? notes : "");
-                insertPs.executeUpdate();
+            try (PreparedStatement ins = conn.prepareStatement(insertSql)) {
+                ins.setInt(1, issueId); ins.setInt(2, updatedBy);
+                ins.setString(3, prevStatus); ins.setString(4, newStatus);
+                ins.setString(5, notes != null ? notes : "");
+                ins.executeUpdate();
             }
-
-            // --- Step 5: COMMIT both operations atomically ---
             conn.commit();
-            System.out.println("[IssueDAO] Status update committed: issue " + issueId
-                               + " -> " + newStatus);
             return true;
-
         } catch (SQLException e) {
-            // --- ROLLBACK on any failure ---
-            System.err.println("[IssueDAO] updateIssueStatus transaction failed: " + e.getMessage());
-            try {
-                conn.rollback();
-                System.out.println("[IssueDAO] Transaction rolled back.");
-            } catch (SQLException rollbackEx) {
-                System.err.println("[IssueDAO] Rollback failed: " + rollbackEx.getMessage());
-            }
+            try { conn.rollback(); } catch (SQLException ex) {}
+            System.err.println("[IssueDAO] updateStatus: " + e.getMessage());
             return false;
-
         } finally {
-            // Always restore auto-commit mode
-            try {
-                conn.setAutoCommit(true);
-            } catch (SQLException ex) {
-                System.err.println("[IssueDAO] Failed to restore auto-commit: " + ex.getMessage());
-            }
+            try { conn.setAutoCommit(true); } catch (SQLException e) {}
         }
     }
 
     // -----------------------------------------------------------------------
-    // Private helper — maps a ResultSet row to an Issue POJO
+    // Analytics stats map
+    // -----------------------------------------------------------------------
+    public Map<String, Object> getAnalyticsStats() {
+        Map<String, Object> stats = new LinkedHashMap<>();
+        try (PreparedStatement ps = conn.prepareStatement("SELECT * FROM vw_issue_stats");
+             ResultSet rs = ps.executeQuery()) {
+            if (rs.next()) {
+                stats.put("totalIssues",       rs.getInt("total_issues"));
+                stats.put("openCount",          rs.getInt("open_count"));
+                stats.put("inProgressCount",    rs.getInt("in_progress_count"));
+                stats.put("resolvedCount",      rs.getInt("resolved_count"));
+                stats.put("closedCount",        rs.getInt("closed_count"));
+                stats.put("avgResolutionHours", rs.getObject("avg_resolution_hours"));
+            }
+        } catch (SQLException e) { System.err.println("[IssueDAO] analytics: " + e.getMessage()); }
+
+        // Issues by category
+        List<Map<String, Object>> catStats = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT category, COUNT(*) AS cnt FROM Issues GROUP BY category ORDER BY cnt DESC");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("category", rs.getString("category"));
+                row.put("count",    rs.getInt("cnt"));
+                catStats.add(row);
+            }
+        } catch (SQLException e) {}
+        stats.put("byCategory", catStats);
+
+        // SLA breached count
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT COUNT(*) FROM Issues WHERE sla_deadline < NOW() AND status IN ('OPEN','ASSIGNED','IN_PROGRESS')");
+             ResultSet rs = ps.executeQuery()) {
+            if (rs.next()) stats.put("slaBreachedCount", rs.getInt(1));
+        } catch (SQLException e) {}
+
+        return stats;
+    }
+
+    // -----------------------------------------------------------------------
+    // Get all issues for CSV export
+    // -----------------------------------------------------------------------
+    public List<Issue> getAllIssuesForExport() {
+        List<Issue> list = new ArrayList<>();
+        String sql = "SELECT i.*, u.name AS citizen_name, d.department_name " +
+                     "FROM Issues i " +
+                     "LEFT JOIN Users u ON i.citizen_id = u.user_id " +
+                     "LEFT JOIN Departments d ON i.assigned_department_id = d.department_id " +
+                     "ORDER BY i.issue_id DESC";
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) list.add(mapRow(rs));
+        } catch (SQLException e) { System.err.println("[IssueDAO] export: " + e.getMessage()); }
+        return list;
+    }
+
+    // -----------------------------------------------------------------------
+    // SLA breach check (called by SlaCheckerServlet)
+    // -----------------------------------------------------------------------
+    public List<Issue> getSlaBreachedIssues() {
+        List<Issue> list = new ArrayList<>();
+        String sql = "SELECT i.*, u.name AS citizen_name, d.department_name " +
+                     "FROM Issues i " +
+                     "LEFT JOIN Users u ON i.citizen_id = u.user_id " +
+                     "LEFT JOIN Departments d ON i.assigned_department_id = d.department_id " +
+                     "WHERE i.sla_deadline < NOW() AND i.status IN ('OPEN','ASSIGNED','IN_PROGRESS')";
+        try (PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) list.add(mapRow(rs));
+        } catch (SQLException e) { System.err.println("[IssueDAO] slaBreached: " + e.getMessage()); }
+        return list;
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers
     // -----------------------------------------------------------------------
     private Issue mapRow(ResultSet rs) throws SQLException {
-        Issue issue = new Issue();
-        issue.setIssueId(rs.getInt("issue_id"));
-        issue.setCitizenId(rs.getInt("citizen_id"));
-        issue.setCategory(rs.getString("category"));
-        issue.setGpsLocation(rs.getString("gps_location"));
-        issue.setDescription(rs.getString("description"));
-        issue.setPhotoUrl(rs.getString("photo_url"));
-        issue.setStatus(rs.getString("status"));
-        issue.setAssignedDepartmentId(rs.getInt("assigned_department_id"));
-        issue.setAssignedCrewId(rs.getInt("assigned_crew_id"));
+        Issue i = new Issue();
+        i.setIssueId(rs.getInt("issue_id"));
+        i.setCitizenId(rs.getInt("citizen_id"));
+        i.setCategory(rs.getString("category"));
+        i.setGpsLocation(rs.getString("gps_location"));
+        i.setDescription(rs.getString("description"));
+        i.setStatus(rs.getString("status"));
+        i.setAssignedDepartmentId(rs.getInt("assigned_department_id"));
+        i.setAssignedCrewId(rs.getInt("assigned_crew_id"));
+        i.setSlaDeadline(rs.getTimestamp("sla_deadline"));
+        i.setCreatedAt(rs.getTimestamp("created_at"));
+        try { i.setCitizenName(rs.getString("citizen_name")); } catch (SQLException ignored) {}
+        try { i.setDepartmentName(rs.getString("department_name")); } catch (SQLException ignored) {}
+        return i;
+    }
 
-        // Display fields from JOIN (may be null)
-        issue.setCitizenName(rs.getString("citizen_name"));
+    private void attachPhotos(List<Issue> issues) {
+        if (issues.isEmpty()) return;
+        StringBuilder ids = new StringBuilder("SELECT issue_id, photo_url FROM Issue_Photos WHERE issue_id IN (");
+        for (int i = 0; i < issues.size(); i++) { ids.append(i > 0 ? "," : "").append("?"); }
+        ids.append(") ORDER BY photo_id");
+        Map<Integer, List<String>> map = new HashMap<>();
+        try (PreparedStatement ps = conn.prepareStatement(ids.toString())) {
+            for (int i = 0; i < issues.size(); i++) ps.setInt(i + 1, issues.get(i).getIssueId());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    int id = rs.getInt(1);
+                    map.computeIfAbsent(id, k -> new ArrayList<>()).add(rs.getString(2));
+                }
+            }
+        } catch (SQLException e) {}
+        issues.forEach((issue) -> {
+            issue.setPhotoUrls(map.getOrDefault(issue.getIssueId(), new ArrayList<>()));
+        });
+    }
 
-        try { issue.setDepartmentName(rs.getString("department_name")); }
-        catch (SQLException ignored) {} // column may not exist in all queries
-
-        return issue;
+    private void attachRatings(List<Issue> issues) {
+        if (issues.isEmpty()) return;
+        StringBuilder ids = new StringBuilder("SELECT * FROM Ratings WHERE issue_id IN (");
+        for (int i = 0; i < issues.size(); i++) { ids.append(i > 0 ? "," : "").append("?"); }
+        ids.append(")");
+        Map<Integer, Rating> map = new HashMap<>();
+        try (PreparedStatement ps = conn.prepareStatement(ids.toString())) {
+            for (int i = 0; i < issues.size(); i++) ps.setInt(i + 1, issues.get(i).getIssueId());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Rating r = new Rating();
+                    r.setRatingId(rs.getInt("rating_id"));
+                    r.setIssueId(rs.getInt("issue_id"));
+                    r.setStars(rs.getInt("stars"));
+                    r.setFeedback(rs.getString("feedback"));
+                    map.put(r.getIssueId(), r);
+                }
+            }
+        } catch (SQLException e) {}
+        issues.forEach((issue) -> {
+            issue.setRating(map.get(issue.getIssueId()));
+        });
     }
 }

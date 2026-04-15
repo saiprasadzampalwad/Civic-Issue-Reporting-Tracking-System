@@ -1,145 +1,82 @@
-<%@ page contentType="text/html;charset=UTF-8" language="java" %>
+<%@ page contentType="text/html;charset=UTF-8" %>
 <%@ taglib prefix="c" uri="http://java.sun.com/jsp/jstl/core" %>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Report Issue — Civic Issue System</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body { background: #f0f4f8; }
-        .navbar { background: #1a3c6e !important; }
-        .navbar-brand, .nav-link, .navbar-text { color: #fff !important; }
-        .form-card { max-width: 700px; margin: 40px auto; }
-        .form-card .card { border:none; border-radius:14px; box-shadow:0 2px 18px rgba(0,0,0,0.1); }
-        .form-card .card-header {
-            background: #1a3c6e; color:#fff;
-            border-radius: 14px 14px 0 0;
-            padding: 18px 28px;
-            font-size: 1.15rem; font-weight: 600;
-        }
-        .form-card .card-body { padding: 28px; }
-        .btn-primary { background: #1a3c6e; border-color: #1a3c6e; }
-        .btn-primary:hover { background: #14305a; }
-        #gpsStatus { font-size: 0.82rem; }
-    </style>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Report Issue — Civic Portal</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+body{background:#f0f4f8}.navbar{background:#1a3c6e!important}.navbar-brand,.navbar-text{color:#fff!important}
+.card{border:none;border-radius:14px;box-shadow:0 2px 18px rgba(0,0,0,.1)}
+.card-header{background:#1a3c6e;color:#fff;border-radius:14px 14px 0 0;padding:16px 24px;font-size:1.05rem;font-weight:600}
+.btn-primary{background:#1a3c6e;border-color:#1a3c6e}.btn-primary:hover{background:#14305a}
+</style>
 </head>
 <body>
-
 <nav class="navbar navbar-expand-lg">
-    <div class="container">
-        <a class="navbar-brand fw-bold" href="#">&#127981; Civic Portal</a>
-        <a href="${pageContext.request.contextPath}/citizen/dashboard" class="btn btn-outline-light btn-sm ms-auto">
-            &larr; Back to Dashboard
-        </a>
-    </div>
+  <div class="container">
+    <a class="navbar-brand fw-bold" href="#">&#127981; Civic Portal</a>
+    <a href="${pageContext.request.contextPath}/citizen/dashboard" class="btn btn-outline-light btn-sm ms-auto">&larr; Dashboard</a>
+  </div>
 </nav>
+<div class="container py-4" style="max-width:680px">
+  <div class="card">
+    <div class="card-header">&#43; Report a Civic Issue</div>
+    <div class="card-body p-4">
+      <c:if test="${not empty errorMessage}"><div class="alert alert-danger"><c:out value="${errorMessage}"/></div></c:if>
+      <%-- enctype MUST be multipart/form-data for file uploads --%>
+      <form action="${pageContext.request.contextPath}/citizen/reportIssue" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="csrfToken" value="${sessionScope.csrfToken}"/>
 
-<div class="container form-card">
-    <div class="card">
-        <div class="card-header">&#43; Report a Civic Issue</div>
-        <div class="card-body">
-
-            <%-- Error message --%>
-            <c:if test="${not empty errorMessage}">
-                <div class="alert alert-danger"><c:out value="${errorMessage}"/></div>
-            </c:if>
-
-            <%--
-                IMPORTANT: enctype="multipart/form-data" is REQUIRED for file upload.
-                Without it, the photo Part will be empty in ReportIssueServlet.
-            --%>
-            <form action="${pageContext.request.contextPath}/citizen/reportIssue"
-                  method="post"
-                  enctype="multipart/form-data"
-                  novalidate>
-
-                <%-- Issue Category --%>
-                <div class="mb-3">
-                    <label for="category" class="form-label fw-semibold">Issue Category <span class="text-danger">*</span></label>
-                    <select class="form-select" id="category" name="category" required>
-                        <option value="" disabled selected>Select a category...</option>
-                        <option value="Road Damage">Road Damage / Potholes</option>
-                        <option value="Streetlight">Streetlight Not Working</option>
-                        <option value="Garbage">Garbage / Waste Collection</option>
-                        <option value="Water Supply">Water Supply Problem</option>
-                        <option value="Sewage">Sewage / Drainage Issue</option>
-                        <option value="Park">Park / Public Space</option>
-                        <option value="Noise">Noise Complaint</option>
-                        <option value="Other">Other</option>
-                    </select>
-                </div>
-
-                <%-- Description --%>
-                <div class="mb-3">
-                    <label for="description" class="form-label fw-semibold">Description <span class="text-danger">*</span></label>
-                    <textarea class="form-control" id="description" name="description"
-                              rows="4" placeholder="Describe the issue in detail..." required></textarea>
-                </div>
-
-                <%-- GPS Location (auto-detect + manual) --%>
-                <div class="mb-3">
-                    <label for="gpsLocation" class="form-label fw-semibold">GPS Location <span class="text-danger">*</span></label>
-                    <div class="input-group">
-                        <input type="text" class="form-control" id="gpsLocation" name="gpsLocation"
-                               placeholder="e.g. 21.1458, 79.0882" required>
-                        <button type="button" class="btn btn-outline-secondary" onclick="detectLocation()">
-                            &#128205; Detect
-                        </button>
-                    </div>
-                    <div id="gpsStatus" class="text-muted mt-1"></div>
-                </div>
-
-                <%-- Photo Upload --%>
-                <div class="mb-4">
-                    <label for="photo" class="form-label fw-semibold">Photo (optional, max 5 MB)</label>
-                    <input type="file" class="form-control" id="photo" name="photo"
-                           accept="image/jpeg,image/png,image/gif,image/webp">
-                    <div class="form-text">Accepted formats: JPG, PNG, GIF, WEBP</div>
-                </div>
-
-                <div class="d-flex gap-2">
-                    <button type="submit" class="btn btn-primary px-4">Submit Issue</button>
-                    <a href="${pageContext.request.contextPath}/citizen/dashboard"
-                       class="btn btn-outline-secondary">Cancel</a>
-                </div>
-
-            </form>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Category <span class="text-danger">*</span></label>
+          <select class="form-select" name="category" required>
+            <option value="" disabled selected>Select category...</option>
+            <option>Road Damage</option><option>Streetlight</option><option>Garbage</option>
+            <option>Water Supply</option><option>Sewage</option><option>Park</option>
+            <option>Noise</option><option>Other</option>
+          </select>
         </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Description <span class="text-danger">*</span></label>
+          <textarea class="form-control" name="description" rows="4" required placeholder="Describe the issue..."></textarea>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">GPS Location <span class="text-danger">*</span></label>
+          <div class="input-group">
+            <input type="text" class="form-control" id="gpsLocation" name="gpsLocation" placeholder="21.1458, 79.0882" required>
+            <button type="button" class="btn btn-outline-secondary" onclick="detectGps()">&#128205; Detect</button>
+          </div>
+          <div id="gpsStatus" class="form-text"></div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Photos (up to 3, max 5 MB each)</label>
+          <input type="file" class="form-control mb-2" name="photo1" accept="image/*">
+          <input type="file" class="form-control mb-2" name="photo2" accept="image/*">
+          <input type="file" class="form-control"      name="photo3" accept="image/*">
+        </div>
+
+        <div class="d-flex gap-2 mt-4">
+          <button type="submit" class="btn btn-primary px-4">Submit Issue</button>
+          <a href="${pageContext.request.contextPath}/citizen/dashboard" class="btn btn-outline-secondary">Cancel</a>
+        </div>
+      </form>
     </div>
+  </div>
 </div>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    // Auto-detect GPS coordinates using the browser's Geolocation API
-    function detectLocation() {
-        var statusEl = document.getElementById('gpsStatus');
-        var inputEl  = document.getElementById('gpsLocation');
-
-        if (!navigator.geolocation) {
-            statusEl.textContent = 'Geolocation is not supported by your browser.';
-            statusEl.className = 'text-danger mt-1';
-            return;
-        }
-
-        statusEl.textContent = 'Detecting location...';
-        statusEl.className = 'text-muted mt-1';
-
-        navigator.geolocation.getCurrentPosition(
-            function(position) {
-                var lat = position.coords.latitude.toFixed(6);
-                var lng = position.coords.longitude.toFixed(6);
-                inputEl.value = lat + ', ' + lng;
-                statusEl.textContent = 'Location detected successfully.';
-                statusEl.className = 'text-success mt-1';
-            },
-            function(error) {
-                statusEl.textContent = 'Could not detect location: ' + error.message;
-                statusEl.className = 'text-danger mt-1';
-            }
-        );
-    }
+function detectGps(){
+  var s=document.getElementById('gpsStatus'), i=document.getElementById('gpsLocation');
+  if(!navigator.geolocation){s.textContent='Not supported.';return;}
+  s.textContent='Detecting...';
+  navigator.geolocation.getCurrentPosition(function(p){
+    i.value=p.coords.latitude.toFixed(6)+', '+p.coords.longitude.toFixed(6);
+    s.textContent='Location detected.';s.className='form-text text-success';
+  },function(e){s.textContent='Error: '+e.message;s.className='form-text text-danger';});
+}
 </script>
-</body>
-</html>
+</body></html>

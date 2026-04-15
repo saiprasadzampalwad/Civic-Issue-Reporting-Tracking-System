@@ -6,7 +6,11 @@
 package com.civicissues.controller;
 
 import com.civicissues.dao.IssueDAO;
+import com.civicissues.dao.UserDAO;
+import com.civicissues.model.Issue;
 import com.civicissues.model.User;
+import com.civicissues.util.CsrfUtil;
+
 
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
@@ -15,93 +19,50 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * UpdateStatusServlet.java — Admin/Crew update the status of an issue.
- *
- * TRANSACTION NOTE:
- *   The actual UPDATE (Issues table) + INSERT (Status_Updates table) is performed
- *   as a single JDBC transaction inside IssueDAO.updateIssueStatus().
- *   If either operation fails, the transaction is rolled back.
- *
- * Accessible by: MUNICIPAL_ADMIN, MAINTENANCE_CREW
- * URL Mapping: /admin/updateStatus  (POST only)
- */
+/** URL: /admin/updateStatus — includes dept/crew assignment + email notification */
 @WebServlet("/admin/updateStatus")
 public class UpdateStatusServlet extends HttpServlet {
 
-    // Allowed status transitions (whitelist)
-    private static final List<String> VALID_STATUSES =
-            Arrays.asList("ASSIGNED", "IN_PROGRESS", "RESOLVED", "CLOSED");
-
+    private static final List<String> VALID = Arrays.asList("ASSIGNED","IN_PROGRESS","RESOLVED","CLOSED");
     private IssueDAO issueDAO;
+    private UserDAO  userDAO;
 
     @Override
-    public void init() throws ServletException {
-        issueDAO = new IssueDAO();
-    }
+    public void init() { issueDAO = new IssueDAO(); userDAO = new UserDAO(); }
 
-    // Only POST is supported — form submission from admin_dashboard.jsp
     @Override
-    protected void doPost(HttpServletRequest request, HttpServletResponse response)
-            throws ServletException, IOException {
-
-        // 1. Session / role guard
-        HttpSession session = request.getSession(false);
-        if (session == null || session.getAttribute("loggedInUser") == null) {
-            response.sendRedirect(request.getContextPath() + "/login");
-            return;
-        }
+    protected void doPost(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        HttpSession session = req.getSession(false);
+        if (session == null || session.getAttribute("loggedInUser") == null) { res.sendRedirect(req.getContextPath()+"/login"); return; }
         User admin = (User) session.getAttribute("loggedInUser");
-        if ("CITIZEN".equals(admin.getRole())) {
-            response.sendRedirect(request.getContextPath() + "/citizen/dashboard");
-            return;
-        }
+        if ("CITIZEN".equals(admin.getRole())) { res.sendRedirect(req.getContextPath()+"/citizen/dashboard"); return; }
+        if (!CsrfUtil.isValid(req)) { res.sendError(403); return; }
 
-        // 2. Parse and validate parameters
-        String issueIdParam  = request.getParameter("issueId");
-        String newStatus     = request.getParameter("newStatus");
-        String notes         = request.getParameter("notes");
-
-        if (issueIdParam == null || newStatus == null) {
-            request.getSession().setAttribute("successMessage",
-                    "Error: Missing issueId or newStatus parameter.");
-            response.sendRedirect(request.getContextPath() + "/admin/dashboard");
-            return;
-        }
+        String issueIdParam = req.getParameter("issueId");
+        String newStatus    = req.getParameter("newStatus");
+        String notes        = req.getParameter("notes");
+        int    deptId       = 0;
+        int    crewId       = 0;
+        try { deptId = Integer.parseInt(req.getParameter("assignedDeptId")); } catch (Exception e) {}
+        try { crewId = Integer.parseInt(req.getParameter("assignedCrewId")); } catch (Exception e) {}
 
         int issueId;
-        try {
-            issueId = Integer.parseInt(issueIdParam.trim());
-        } catch (NumberFormatException e) {
-            session.setAttribute("successMessage", "Error: Invalid issue ID.");
-            response.sendRedirect(request.getContextPath() + "/admin/dashboard");
-            return;
+        try { issueId = Integer.parseInt(issueIdParam.trim()); }
+        catch (Exception e) { session.setAttribute("successMessage","Error: Invalid issue ID."); res.sendRedirect(req.getContextPath()+"/admin/dashboard"); return; }
+
+        if (!VALID.contains(newStatus != null ? newStatus.trim().toUpperCase() : "")) {
+            session.setAttribute("successMessage","Error: Invalid status."); res.sendRedirect(req.getContextPath()+"/admin/dashboard"); return;
         }
 
-        // 3. Whitelist check — prevent arbitrary status strings from reaching the DB
-        if (!VALID_STATUSES.contains(newStatus.trim().toUpperCase())) {
-            session.setAttribute("successMessage", "Error: Invalid status value.");
-            response.sendRedirect(request.getContextPath() + "/admin/dashboard");
-            return;
-        }
+        boolean ok = issueDAO.updateIssueStatus(issueId, newStatus.trim().toUpperCase(), admin.getUserId(), deptId, crewId, notes);
 
-        // 4. Perform transactional update via DAO
-        boolean success = issueDAO.updateIssueStatus(
-                issueId,
-                newStatus.trim().toUpperCase(),
-                admin.getUserId(),
-                notes
-        );
-
-        // 5. Set feedback message and redirect (POST-Redirect-GET)
-        if (success) {
-            session.setAttribute("successMessage",
-                    "Issue #" + issueId + " status updated to " + newStatus + ".");
+        if (ok) {
+            // Email notification simulated (no email feature)
+            System.out.println("[Simulated Notification] Status update for issue #" + issueId + " to " + newStatus.trim().toUpperCase());
+            session.setAttribute("successMessage","Issue #"+issueId+" updated to "+newStatus+".");
         } else {
-            session.setAttribute("successMessage",
-                    "Failed to update Issue #" + issueId + ". Please try again.");
+            session.setAttribute("successMessage","Failed to update Issue #"+issueId+". Try again.");
         }
-
-        response.sendRedirect(request.getContextPath() + "/admin/dashboard");
+        res.sendRedirect(req.getContextPath()+"/admin/dashboard");
     }
 }
