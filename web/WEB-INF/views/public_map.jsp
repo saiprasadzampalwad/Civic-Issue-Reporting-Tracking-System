@@ -26,7 +26,8 @@ body{background:#f0f4f8;margin:0}
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-var map = L.map('map').setView([21.1458, 79.0882], 12); // Nagpur default
+var map = L.map('map').setView([19.8758, 75.3393], 12); //chhatrapati sambhajinagar
+
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
   attribution:'&copy; OpenStreetMap contributors', maxZoom:18

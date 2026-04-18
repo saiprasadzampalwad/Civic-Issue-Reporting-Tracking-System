@@ -47,7 +47,7 @@ body{background:#f0f4f8}.navbar{background:#1a3c6e!important}.navbar-brand,.navb
         <div class="mb-3">
           <label class="form-label fw-semibold">GPS Location <span class="text-danger">*</span></label>
           <div class="input-group">
-            <input type="text" class="form-control" id="gpsLocation" name="gpsLocation" placeholder="21.1458, 79.0882" required>
+            <input type="text" class="form-control" id="gpsLocation" name="gpsLocation" placeholder="19.8758, 75.3393" required>
             <button type="button" class="btn btn-outline-secondary" onclick="detectGps()">&#128205; Detect</button>
           </div>
           <div id="gpsStatus" class="form-text"></div>
