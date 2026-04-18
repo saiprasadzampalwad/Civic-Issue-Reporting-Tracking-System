@@ -1,1 +1,46 @@
+# NetBeans / Java Web Project
 /dist/
+build/
+nbproject/private/
+*.log
+*.tmp
+netbeans.cache
+nbactions.xml
+nb-configuration.xml
+
+# Compiled classes
+build/web/WEB-INF/classes/
+*.class
+
+# Dependencies
+lib/
+
+# Database
+database/
+*.sql.dump
+*.backup.sql
+
+# Uploads & User Data
+build/web/uploads/
+uploads/
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.properties
+
+# NetBeans specific
+**/nbproject/private/**
