@@ -1,9 +1,10 @@
-# Civic Issue Reporting & Tracking System 🚨🗺️
+<img width="500" height="195" alt="image" src="https://github.com/user-attachments/assets/62497f8a-bc70-41af-b998-f16a9cfb3f5a" /># Civic Issue Reporting & Tracking System 🚨🗺️
 
 ## 📋 Overview
 Comprehensive web platform for citizens to **report civic issues** (potholes, streetlights, garbage, waterlogging) with **real-time map tracking**. Authorities can assign, update status, and monitor SLAs.
 
-[![Public Map Demo](build/web/uploads/photos/b83ce4f9-ab90-4086-8d79-9d6e02a7730c.png)](build/web/uploads/photos/b83ce4f9-ab90-4086-8d79-9d6e02a7730c.png)
+<img width="500" height="195" alt="image" src="https://github.com/user-attachments/assets/05f64f93-b18f-415d-b2e1-149dc7c387f6" />
+
 *Public Issue Map — Color-coded by status (Nagpur demo)*
 
 ## 🚀 Features
@@ -80,9 +81,10 @@ GET  /admin/exportcsv        → Download CSV
 ## 📸 Screenshots
 **Add your screenshots here:**
 ```
-![Public Map](/screenshots/map.png)
-![Report Form](/screenshots/report.png) 
-![Dashboard](/screenshots/dashboard.png)
+!<img width="1914" height="896" alt="Screenshot 2026-04-18 191549" src="https://github.com/user-attachments/assets/922f14f5-769e-438a-9b42-a2986099bf10" />
+!<img width="1819" height="922" alt="Screenshot 2026-04-18 191918" src="https://github.com/user-attachments/assets/e5455a4d-8a60-48f8-a573-3e7a19a11a52" />
+!<img width="1899" height="880" alt="Screenshot 2026-04-18 191809" src="https://github.com/user-attachments/assets/67fd9f59-535f-4dc5-b91e-7574adf6fb22" />
+
 ```
 *Suggestion: Take screenshots of /map, report form, dashboard → Save in `/screenshots/` folder*
 
