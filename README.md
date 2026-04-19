@@ -100,7 +100,9 @@ GET  /admin/exportcsv        → Download CSV
 ```
 
 ## 📄 License
-MIT License — Free to use, modify, distribute.
+[MIT License](LICENSE) © 2024
+
+See [LICENSE](LICENSE) file for details.
 
 ---
 
